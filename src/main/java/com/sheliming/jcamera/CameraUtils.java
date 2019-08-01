@@ -1,12 +1,17 @@
 package com.sheliming.jcamera;
 
+import com.sheliming.jcamera.swing.PreviewFrame;
+import org.bytedeco.javacpp.opencv_core;
+import org.bytedeco.javacpp.opencv_videoio;
 import org.bytedeco.javacv.*;
 
 import javax.swing.*;
+import java.awt.*;
 
 public class CameraUtils {
     /**
      * 获取所有摄像头名称
+     *
      * @return
      */
     public static String[] getAllCameraName() {
@@ -22,38 +27,50 @@ public class CameraUtils {
     /**
      * 预览摄像头
      */
-    public static void preview(int deviceId) throws FrameGrabber.Exception, InterruptedException {
-        OpenCVFrameGrabber grabber = new OpenCVFrameGrabber(deviceId);
-        grabber.start();   //开始获取摄像头数据
-        CanvasFrame canvas = new CanvasFrame("摄像头");//新建一个窗口
-        canvas.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
-        canvas.setAlwaysOnTop(true);
+    //TODO 对象有没有释放！！
+    public static void preview(int deviceId) {
+        opencv_videoio.VideoCapture vc = new opencv_videoio.VideoCapture(deviceId);
+        //使用java的JFrame显示图像
+        CanvasFrame cFrame = new CanvasFrame("opencv自带", CanvasFrame.getDefaultGamma() / 2.2);
+        cFrame.setVisible(false);
+
+        Canvas canvas = cFrame.getCanvas();
+        PreviewFrame previewFrame = new PreviewFrame("预览摄像头",canvas);
+
+        //javacv提供的转换器，方便mat转换为Frame
+        OpenCVFrameConverter.ToIplImage converter = new OpenCVFrameConverter.ToIplImage();
+        opencv_core.Mat mat = new opencv_core.Mat();
+
         while (true) {
-            if (!canvas.isDisplayable()) {//窗口是否关闭
-                grabber.stop();//停止抓取
-                System.exit(-1);//退出
+            if (previewFrame.isClosed()) {//窗口是否关闭
+                vc.release();//停止抓取
+                return;
+            }
+            vc.retrieve(mat);//重新获取mat
+            if (vc.grab()) {//是否采集到摄像头数据
+                if (vc.read(mat)) {//读取一帧mat图像
+                    cFrame.showImage(converter.convert(mat));
+                }
+                mat.release();//释放mat
             }
 
-            Frame frame = grabber.grab();
+            //每45毫秒捕获一帧
+            try {
+                Thread.sleep(45);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
 
-            canvas.showImage(frame);//获取摄像头图像并放到窗口上显示， 这里的Frame frame=grabber.grab(); frame是一帧视频图像
-            Thread.sleep(50);//50毫秒刷新一次图像
         }
 
     }
 
     public static void main(String[] args) {
         String[] allCameraName = getAllCameraName();
-        for (String cameraName : allCameraName) {
-            System.out.println(cameraName);
+        for(int i=0;i<allCameraName.length;i++){
+            System.out.println(allCameraName[i]);
+            preview(i);
         }
 
-        try {
-            preview(0);
-        } catch (FrameGrabber.Exception e) {
-            e.printStackTrace();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
     }
 }
