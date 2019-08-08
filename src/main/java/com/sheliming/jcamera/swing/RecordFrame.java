@@ -65,7 +65,7 @@ public class RecordFrame extends CanvasFrame {
     private class RecordActionListener implements ActionListener {
         public void actionPerformed(ActionEvent e) {
             try {
-                CameraRecord.record(camera, 25, grabber);
+                CameraRecord.record(camera, grabber);
             } catch (java.lang.Exception e1) {
                 e1.printStackTrace();
             }
