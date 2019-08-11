@@ -16,13 +16,15 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.*;
 
+import static org.bytedeco.javacpp.RealSense.camera;
+
 public class CameraRecord {
     public static final int FRAME_RATE = 50;
 
-    public static ExecutorService RecordThreadPool = Executors.newFixedThreadPool(5);
     public static ExecutorService RecordFrameThreadPool = Executors.newFixedThreadPool(5);
+    public static ExecutorService newRecorderThreadPool = Executors.newFixedThreadPool(5);
 
-    public static HashMap<Integer, LinkedBlockingQueue<Frame>> hashmap = new HashMap<Integer, LinkedBlockingQueue<Frame>>();
+    public static volatile ConcurrentHashMap<Integer, RecorderObj> recorderHashMap = new ConcurrentHashMap<Integer, RecorderObj>();
 
     /**
      * 预览摄像头
@@ -113,50 +115,51 @@ public class CameraRecord {
      * @throws FrameGrabber.Exception
      * @throws InterruptedException
      */
-    public static String recordFrame(Camera camera) throws FrameGrabber.Exception, InterruptedException {
+    public static String recordFrame(Camera camera) {
+
+        RecorderObj recorderObj = new RecorderObj();
+        recorderObj.setCamera(camera);
+
+        String saveFileName = camera.getName() + System.currentTimeMillis() + ".mp4";
+        recorderObj.setSaveFileName(saveFileName);
+
         OpenCVFrameGrabber grabber = getOpenCVFrameGrabber(camera.getDeviceId());
+        recorderObj.setGrabber(grabber);
 
         //把摄像头的状态设置为开启
         camera.setState(CamerStatus.open);
-        if (hashmap.containsKey(camera.getDeviceId())) {
+        if (recorderHashMap.containsKey(camera.getDeviceId())) {
             return "摄像头正在打开中";
         } else {
-            hashmap.put(camera.getDeviceId(), new LinkedBlockingQueue<Frame>());
+            recorderHashMap.put(camera.getDeviceId(), recorderObj);
         }
 
-        RecordFrameThreadPool.submit(new RecordFrameThread(camera, grabber));
-        return "开启成功";
+        RecordFrameThreadPool.submit(new RecordFrameThread(recorderObj));
+
+        //起一个线程打开录制器
+        newRecorderThreadPool.submit(new CreateFFmpegRecorderThread(recorderObj));
+
+        return saveFileName;
     }
 
-
-    public static String record(Camera camera, OpenCVFrameGrabber grabber) {
-
-
-        RecordThreadPool.submit(new RecordThread(camera, FRAME_RATE, grabber));
-        System.out.println(" ===> main Thread execute here ! ");
-
-
-        return null;
-    }
 
     public static class RecordFrameThread implements Runnable {
+        private RecorderObj recorderObj;
 
-        private Camera camera;
-        private OpenCVFrameGrabber grabber;
-
-        public RecordFrameThread(Camera camera, OpenCVFrameGrabber grabber) {
-            this.camera = camera;
-            this.grabber = grabber;
+        public RecordFrameThread(RecorderObj recorderObj) {
+            this.recorderObj = recorderObj;
         }
 
         public void run() {
             try {
-                LinkedBlockingQueue<Frame> linkedBlockingQueue = hashmap.get(camera.getDeviceId());
-
-                RecordFrame cFrame = new RecordFrame(camera, grabber);//新建一个窗口
+                RecordFrame cFrame = new RecordFrame(recorderObj);//新建一个窗口
                 cFrame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
                 cFrame.setAlwaysOnTop(true);
 
+                long startTime = 0;
+                long videoTS = 0;
+
+                OpenCVFrameGrabber grabber = recorderObj.getGrabber();
 
                 while (true) {
                     if (!cFrame.isDisplayable()) {//窗口是否关闭
@@ -166,8 +169,33 @@ public class CameraRecord {
 
                     Frame frame = grabber.grab();
 
-                    if (camera.getState() == CamerStatus.record) {
-                        linkedBlockingQueue.put(frame);
+                    System.out.println(recorderObj.getCamera().getState());
+                    System.out.println(recorderObj.getRecorder());
+                    if (recorderObj.getCamera().getState() == CamerStatus.record) {
+                        if (recorderObj.getRecorder() != null) {
+                            System.out.println("录制正式开始...");
+
+                            //定义我们的开始时间，当开始时需要先初始化时间戳
+                            if (startTime == 0)
+                                startTime = System.currentTimeMillis();
+
+                            // 创建一个 timestamp用来写入帧中
+                            videoTS = 1000 * (System.currentTimeMillis() - startTime);
+                            //检查偏移量
+                            if (videoTS > recorderObj.getRecorder().getTimestamp()) {
+                                System.out.println("Lip-flap correction: " + videoTS + " : " + recorderObj.getRecorder().getTimestamp() + " -> "
+                                        + (videoTS - recorderObj.getRecorder().getTimestamp()));
+                                //告诉录制器写入这个timestamp
+                                recorderObj.getRecorder().setTimestamp(videoTS);
+                            }
+                            // 发送帧
+                            try {
+                                recorderObj.getRecorder().record(frame);
+                            } catch (org.bytedeco.javacv.FrameRecorder.Exception e) {
+                                System.out.println("录制帧发生异常，什么都不做");
+                                e.printStackTrace();
+                            }
+                        }
                     }
 
                     cFrame.showImage(frame);//获取摄像头图像并放到窗口上显示， 这里的Frame frame=grabber.grab(); frame是一帧视频图像
@@ -180,67 +208,10 @@ public class CameraRecord {
         }
     }
 
-    public static class RecordThread implements Runnable {
-        private static final int AUDIO_DEVICE_INDEX = 4;
-        private Camera camera;
-        private int frameRate;
-        private OpenCVFrameGrabber grabber;
-
-        public RecordThread(Camera camera, int frameRate, OpenCVFrameGrabber grabber) {
-            this.camera = camera;
-            this.frameRate = frameRate;
-            this.grabber = grabber;
-        }
-
-        public void run() {
-            try {
-                LinkedBlockingQueue<Frame> linkedBlockingQueue = hashmap.get(camera.getDeviceId());
-                Loader.load(opencv_objdetect.class);
-
-                OpenCVFrameConverter.ToIplImage converter = new OpenCVFrameConverter.ToIplImage();//转换器
-                opencv_core.IplImage grabbedImage = converter.convert(grabber.grab());//抓取一帧视频并将其转换为图像，至于用这个图像用来做什么？加水印，人脸识别等等自行添加
-                int width = grabbedImage.width();
-                int height = grabbedImage.height();
-
-                final FFmpegFrameRecorder recorder = getfFmpegFrameRecorder("11111.mp4", width, height, FRAME_RATE);
-
-
-                if (startRecorder(recorder)) return;
-
-                addSound(AUDIO_DEVICE_INDEX, FRAME_RATE, recorder);
-
-                long startTime = 0;
-                long videoTS = 0;
-                org.bytedeco.javacv.Frame rotatedFrame = converter.convert(grabbedImage);//不知道为什么这里不做转换就不能推到rtmp
-                int i = 0;
-
-                //把摄像头的状态设为录像
-                camera.setState(CamerStatus.record);
-
-                while (camera.getState() == CamerStatus.record && (grabbedImage = converter.convert(linkedBlockingQueue.take())) != null) {
-                    i++;
-                    System.out.println(i);
-                    rotatedFrame = converter.convert(grabbedImage);
-                    if (startTime == 0) {
-                        startTime = System.currentTimeMillis();
-                    }
-                    recorder.setTimestamp(videoTS);
-                    videoTS = 1000 * (System.currentTimeMillis() - startTime);
-                    recorder.record(rotatedFrame);
-                    //Thread.sleep(40);
-                }
-
-                System.out.println("录制结束");
-                recorder.stop();
-                recorder.release();
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            } catch (FrameRecorder.Exception e) {
-                e.printStackTrace();
-            } catch (FrameGrabber.Exception e) {
-                e.printStackTrace();
-            }
-        }
+    public static void record(RecorderObj recorderObj) {
+        System.out.println("开始录制");
+        Camera camera = recorderObj.getCamera();
+        camera.setState(CamerStatus.record);
     }
 
     /**
@@ -249,20 +220,42 @@ public class CameraRecord {
      * @param camera
      */
     public static void stopRecord(Camera camera) {
+        System.out.println("停止录制");
         if (camera.getState() != CamerStatus.record) {
             System.out.println("摄像头没有打开");
             return;
         }
         camera.setState(CamerStatus.open);
+    }
 
-        LinkedBlockingQueue<Frame> linkedBlockingQueue = hashmap.get(camera.getDeviceId());
-        try {
-            linkedBlockingQueue.put(new Frame());
-        } catch (InterruptedException e) {
-            e.printStackTrace();
+    /**
+     * 因为获取FFmpegRecorder时间较长，所以放在单独的线程中去获取
+     */
+    public static class CreateFFmpegRecorderThread implements Runnable {
+
+        private volatile RecorderObj recorderObj;
+
+        public CreateFFmpegRecorderThread(RecorderObj recorderObj) {
+            this.recorderObj = recorderObj;
         }
 
+        public void run() {
+            System.out.println("开始初始化recorder");
+            OpenCVFrameGrabber grabber = recorderObj.getGrabber();
+            int imageWidth = grabber.getImageWidth();
+            int imageHeight = grabber.getImageHeight();
+
+            System.out.println("imageWidth:" + imageWidth + "imageHeight:" + imageHeight);
+
+            FFmpegFrameRecorder recorder = getFFmpegFrameRecorder(recorderObj.getSaveFileName(), imageWidth, imageHeight, FRAME_RATE);
+            recorderObj.setRecorder(recorder);
+            System.out.println("初始化recorder完成:" + recorderObj.getRecorder());
+
+            startRecorder(recorder);
+            System.out.println("start recorder 完成");
+        }
     }
+
 
     private static OpenCVFrameGrabber getOpenCVFrameGrabber(int deviceId) {
         /**
@@ -371,7 +364,8 @@ public class CameraRecord {
         }).start();
     }
 
-    private static FFmpegFrameRecorder getfFmpegFrameRecorder(String outputFile, int captureWidth, int captureHeight, int FRAME_RATE) {
+
+    private static FFmpegFrameRecorder getFFmpegFrameRecorder(String outputFile, int captureWidth, int captureHeight, int FRAME_RATE) {
         /**
          * FFmpegFrameRecorder(String filename, int imageWidth, int imageHeight,
          * int audioChannels) fileName可以是本地文件（会自动创建），也可以是RTMP路径（发布到流媒体服务器）

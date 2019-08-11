@@ -2,6 +2,7 @@ package com.sheliming.jcamera.swing;
 
 import com.sheliming.jcamera.Camera;
 import com.sheliming.jcamera.record.CameraRecord;
+import com.sheliming.jcamera.record.RecorderObj;
 import org.bytedeco.javacv.CanvasFrame;
 import org.bytedeco.javacv.OpenCVFrameGrabber;
 
@@ -15,12 +16,11 @@ import java.awt.event.WindowEvent;
  * 预览摄像头的时候
  */
 public class RecordFrame extends CanvasFrame {
-    private Camera camera;
     private JPanel jPanel;
     private JButton recordButton;
     private JButton cancelButton;
 
-    private OpenCVFrameGrabber grabber;
+    private RecorderObj recorderObj;
 
     //标记这个界面还有没有关闭，如果关闭了，就不捕获照片了
     private boolean isClosed = false;
@@ -33,11 +33,10 @@ public class RecordFrame extends CanvasFrame {
         isClosed = closed;
     }
 
-    public RecordFrame(Camera camera, OpenCVFrameGrabber grabber) {
-        super(camera.getName());
+    public RecordFrame(RecorderObj recorderObj) {
+        super(recorderObj.getCamera().getName());
 
-        this.camera = camera;
-        this.grabber = grabber;
+        this.recorderObj = recorderObj;
 
         init();
 
@@ -65,7 +64,8 @@ public class RecordFrame extends CanvasFrame {
     private class RecordActionListener implements ActionListener {
         public void actionPerformed(ActionEvent e) {
             try {
-                CameraRecord.record(camera, grabber);
+                System.out.println("点击开始录制");
+                CameraRecord.record(recorderObj);
             } catch (java.lang.Exception e1) {
                 e1.printStackTrace();
             }
@@ -75,7 +75,8 @@ public class RecordFrame extends CanvasFrame {
     private class StopRecordActionListener implements ActionListener {
         public void actionPerformed(ActionEvent e) {
             try {
-                CameraRecord.stopRecord(camera);
+                System.out.println("点击停止录制");
+                CameraRecord.stopRecord(recorderObj.getCamera());
             } catch (java.lang.Exception e1) {
                 e1.printStackTrace();
             }
