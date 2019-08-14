@@ -12,14 +12,16 @@ import javax.swing.*;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.ShortBuffer;
-import java.util.HashMap;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.List;
 import java.util.concurrent.*;
 
-import static org.bytedeco.javacpp.RealSense.camera;
+import static org.bytedeco.javacpp.opencv_core.addWeighted;
 
 public class CameraRecord {
     public static final int FRAME_RATE = 50;
+    public static final int AUDIO_DEVICE_INDEX = 4;
 
     public static ExecutorService RecordFrameThreadPool = Executors.newFixedThreadPool(5);
     public static ExecutorService newRecorderThreadPool = Executors.newFixedThreadPool(5);
@@ -161,13 +163,29 @@ public class CameraRecord {
 
                 OpenCVFrameGrabber grabber = recorderObj.getGrabber();
 
+                // 转换器，用于Frame/Mat/IplImage相互转换
+                OpenCVFrameConverter.ToIplImage converter = new OpenCVFrameConverter.ToIplImage();
+                // 水印文字位置
+                opencv_core.Point point = new opencv_core.Point(450, 30);
+                // 颜色，使用黄色
+                opencv_core.Scalar scalar = new opencv_core.Scalar(255, 255, 255, 0);
+                opencv_core.Mat logo = opencv_imgcodecs.imread("waterLogo.png");
+                SimpleDateFormat smft=new SimpleDateFormat("YYYY-MM-dd HH:mm:ss");
+
                 while (true) {
                     if (!cFrame.isDisplayable()) {//窗口是否关闭
-                        grabber.stop();//停止抓取
+                        closeResource(recorderObj,cFrame);
                         System.exit(-1);//退出
                     }
 
                     Frame frame = grabber.grab();
+
+                    opencv_core.Mat mat = converter.convertToMat(grabber.grabFrame());
+                    // 加文字水印，opencv_imgproc.putText（图片，水印文字，文字位置，字体，字体大小，字体颜色，字体粗度，平滑字体，是否翻转文字）
+                    opencv_imgproc.putText(mat, smft.format(new Date()), point, opencv_imgproc.CV_FONT_VECTOR0, 0.5, scalar, 1, 20, false);
+                    // 定义感兴趣区域(位置，logo图像大小)
+                    opencv_core.Mat ROI = mat.apply(new opencv_core.Rect(10, 10, logo.cols(), logo.rows()));
+                    addWeighted(ROI, 1, logo, 0.5, 0.0, ROI);
 
                     System.out.println(recorderObj.getCamera().getState());
                     System.out.println(recorderObj.getRecorder());
@@ -176,8 +194,11 @@ public class CameraRecord {
                             System.out.println("录制正式开始...");
 
                             //定义我们的开始时间，当开始时需要先初始化时间戳
-                            if (startTime == 0)
+                            if (startTime == 0) {
                                 startTime = System.currentTimeMillis();
+                                addSound(recorderObj.getRecorder());
+                            }
+
 
                             // 创建一个 timestamp用来写入帧中
                             videoTS = 1000 * (System.currentTimeMillis() - startTime);
@@ -299,7 +320,7 @@ public class CameraRecord {
         return grabber;
     }
 
-    private static void addSound(final int AUDIO_DEVICE_INDEX, final int FRAME_RATE, final FFmpegFrameRecorder recorder) {
+    private static void addSound(final FFmpegFrameRecorder recorder) {
         // 音频捕获
         new Thread(new Runnable() {
             public void run() {
@@ -460,6 +481,34 @@ public class CameraRecord {
 
         }
         return false;
+    }
+
+    private static void closeResource(RecorderObj recorderObj, CanvasFrame cFrame) {
+        FFmpegFrameRecorder recorder = recorderObj.getRecorder();
+        OpenCVFrameGrabber grabber = recorderObj.getGrabber();
+        cFrame.dispose();
+        try {
+            if (recorder != null) {
+                recorder.stop();
+            }
+        } catch (FrameRecorder.Exception e) {
+            System.out.println("关闭录制器失败");
+            try {
+                if (recorder != null) {
+                    grabber.stop();
+                }
+            } catch (FrameGrabber.Exception e1) {
+                System.out.println("关闭摄像头失败");
+                return;
+            }
+        }
+        try {
+            if (recorder != null) {
+                grabber.stop();
+            }
+        } catch (FrameGrabber.Exception e) {
+            System.out.println("关闭摄像头失败");
+        }
     }
 
     public static void main(String[] args) throws FrameGrabber.Exception, InterruptedException {

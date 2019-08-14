@@ -44,7 +44,6 @@ public class WaterMarkDemo {
                 opencv_imgproc.putText(mat, "eguid!", point, opencv_imgproc.CV_FONT_VECTOR0, 1.2, scalar, 1, 20, false);
                 // 定义感兴趣区域(位置，logo图像大小)
                 Mat ROI = mat.apply(new Rect(400, 350, logo.cols(), logo.rows()));
-
                 addWeighted(ROI, alpha, logo, 1.0 - alpha, 0.0, ROI);
                 // 把logo图像复制到感兴趣区域
 //				 logo.copyTo(ROI, mask);
